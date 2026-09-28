@@ -34,6 +34,7 @@
 #include <primitives.h>
 #include <LinearExtrudeNode.h>
 #include <RotateExtrudeNode.h>
+#include <HelicoidalExtrudeNode.h>
 #include <PathExtrudeNode.h>
 #include <SkinNode.h>
 

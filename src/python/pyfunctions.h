@@ -133,6 +133,8 @@ PyObject *python_path_extrude(PyObject *self, PyObject *args, PyObject *kwargs);
 PyObject *python_oo_linear_extrude(PyObject *obj, PyObject *args, PyObject *kwargs);
 PyObject *python_oo_rotate_extrude(PyObject *obj, PyObject *args, PyObject *kwargs);
 PyObject *python_oo_path_extrude(PyObject *obj, PyObject *args, PyObject *kwargs);
+PyObject *python_helicoidal_extrude(PyObject *self, PyObject *args, PyObject *kwargs);
+PyObject *python_oo_helicoidal_extrude(PyObject *obj, PyObject *args, PyObject *kwargs);
 
 // Modifier functions
 PyObject *python_color(PyObject *self, PyObject *args, PyObject *kwargs);

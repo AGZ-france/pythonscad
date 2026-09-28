@@ -18,6 +18,7 @@ namespace fs = std::filesystem;
 #include "core/Arguments.h"
 #include "core/function.h"
 
+#include "../src/core/HelicoidalExtrudeNode.h"
 #include "../src/geometry/GeometryEvaluator.h"
 #include "../src/core/primitives.h"
 #include "core/Tree.h"

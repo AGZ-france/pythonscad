@@ -742,6 +742,7 @@ if(ENABLE_PYTHON)
     src/python/py_primitives.cc
     src/python/py_transform.cc
     src/python/py_extrude.cc
+    src/python/py_extrude2.cc
     src/python/py_csg.cc
     src/python/py_analysis.cc
     src/python/py_ops.cc
@@ -1575,6 +1576,8 @@ set(CORE_SOURCES
   src/core/customizer/CommentParser.cc
   src/core/customizer/ParameterObject.cc
   src/core/customizer/ParameterSet.cc
+  src/core/HelicoidalExtrude.cc
+  src/core/HelicoidalExtrudeNode.h
   src/core/function.cc
   src/core/module.cc
   src/core/node.cc
@@ -1665,6 +1668,7 @@ if(EXPERIMENTAL AND ENABLE_CGAL)
 endif()
 
 set(CGAL_SOURCES
+  src/geometry/GeometryEvaluator2.cc
   src/geometry/cgal/cgalutils.cc
   src/geometry/cgal/cgalutils-applyops.cc
   src/geometry/cgal/cgalutils-applyops-minkowski.cc

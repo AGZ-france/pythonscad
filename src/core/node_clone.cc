@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "core/TransformNode.h"
+#include "core/HelicoidalExtrudeNode.h"
 #include "core/RotateExtrudeNode.h"
 #include "core/PathExtrudeNode.h"
 #include "core/PullNode.h"
@@ -95,6 +96,7 @@ NodeCloneFunc(CubeNode) NodeCloneFunc(SphereNode) NodeCloneFunc(CylinderNode)
 #if defined(ENABLE_LIBFIVE)
                           NodeCloneFunc(FrepNode)
 #endif
+			NodeCloneFunc(HelicoidalExtrudeNode)
 
                             std::shared_ptr<AbstractNode> AbstractNode::clone(void)
 {
@@ -116,6 +118,7 @@ NodeCloneFunc(CubeNode) NodeCloneFunc(SphereNode) NodeCloneFunc(CylinderNode)
 #if defined(ENABLE_LIBFIVE)
                           NodeCloneUse(FrepNode)
 #endif
+			NodeCloneUse(HelicoidalExtrudeNode)
                             if (clone != nullptr)
   {
     clone->idx = idx_counter++;

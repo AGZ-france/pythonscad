@@ -178,6 +178,28 @@ bool is_approximately_convex(const PolySet& ps)
 #endif
 }
 
+void translate(PolySet& ps, const Vector3d& translation)
+{
+//  for (auto& p : ps.vertices) {
+//    for (auto& v : p) {
+	for (auto& v : ps.vertices) {
+      v += translation;
+    }
+//  }
+}
+
+void scale(PolySet &ps, const Vector3d &scale)
+{
+//    for(auto &p : ps.vertices) {
+//        for(auto &v : p) {
+	for (auto& v : ps.vertices) {
+            v[0] *= scale[0];
+            v[1] *= scale[1];
+            v[2] *= scale[2];
+//        }
+    }
+}
+
 // Get as or convert the geometry to a PolySet.
 std::shared_ptr<const PolySet> getGeometryAsPolySet(const std::shared_ptr<const Geometry>& geom)
 {

@@ -766,6 +766,11 @@ PyMethodDef PyOpenSCADFunctions[] = {
    "linear_extrude(obj, height=10)\n"
    "linear_extrude(obj, height=10, twist=90, slices=20)\n"
    "linear_extrude(obj, height=10, scale=0.5, center=True)"},
+  {"helicoidal_extrude", (PyCFunction)python_helicoidal_extrude, METH_VARARGS | METH_KEYWORDS,
+   "Extrude a 2D shape around an axis.\n"
+   "helicoidal_extrude(obj, *, step=z)\n"
+   "helicoidal_extrude(obj, *, step=z, angle=180)\n"
+   "helicoidal_extrude(obj, *, step=z, angle=360)"},
   {"rotate_extrude", (PyCFunction)python_rotate_extrude, METH_VARARGS | METH_KEYWORDS,
    "Extrude a 2D shape around an axis.\n"
    "rotate_extrude(obj)\n"
@@ -1004,6 +1009,7 @@ PyMethodDef PyOpenSCADFunctions[] = {
   {#name, (PyCFunction)python_oo_##name, METH_VARARGS | METH_KEYWORDS, desc},
 
 PyMethodDef PyOpenSCADMethods[] = {
+  OO_METHOD_ENTRY(helicoidal_extrude, "Helicoidal Object")
   OO_METHOD_ENTRY(translate, "Move Object") OO_METHOD_ENTRY(rotate, "Rotate Object") OO_METHOD_ENTRY(
     right, "Right Object") OO_METHOD_ENTRY(left, "Left Object") OO_METHOD_ENTRY(back, "Back Object")
     OO_METHOD_ENTRY(front, "Front Object") OO_METHOD_ENTRY(up, "Up Object") OO_METHOD_ENTRY(
