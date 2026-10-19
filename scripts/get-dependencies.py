@@ -289,7 +289,7 @@ def build_commands(cfg: dict, distro: DistroInfo, packages: List[str], assume_ye
         # Package suffixes: :p = MINGW_PACKAGE_PREFIX-only, : = no prefix translation
         confirm = "--noconfirm" if assume_yes else "--needed"
         cmds.append(["pacman", "--sync", "--needed", confirm, "pactoys", "libxml2"])
-        cmds.append(["pacboy", "--sync", "--needed", confirm, *packages])
+        cmds.append(["C:/msys64/usr/bin/bash.exe", "/usr/bin/pacboy", "--sync", "--needed", confirm, *packages])
     elif mgr == "eopkg":
         # Solus
         cmds.append(["eopkg", "-y", "install", *packages])

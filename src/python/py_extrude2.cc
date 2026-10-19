@@ -85,14 +85,16 @@ PyObject *python_oo_helicoidal_extrude(PyObject *obj, PyObject *args, PyObject *
     node->children.push_back(child);
   }
 
-  double xScale = 0.0, yScale = 0.0;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|$dddidddddddddOOOO",kwlist, &node->angle, &node->step, &node->xOffset, 
-		&node->convexity, &xScale, &yScale, &node->axeRotate, &node->xScalEnd, &node->yScalEnd, &node->zScalEnd,
-		&node->zRotate, &node->xRotate, &node->xOffsetEnd, 
-                &scaleBegin, &scaleEnd, &scaleMatrix, &origin)) {
+  double xScale = -1.0, yScale = -1.0;
+  node->xOffsetEnd = -1.0;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|$dddidddddddddOOOO",kwlist, 
+		&node->angle, &node->step, &node->xOffset, &node->convexity, &xScale, &yScale, &node->axeRotate, &node->xScalEnd, &node->yScalEnd, &node->zScalEnd,
+		&node->zRotate, &node->xRotate, &node->xOffsetEnd, &scaleBegin, &scaleEnd, &scaleMatrix, &origin)) {
     fprintf(stderr, "error during parsing in python_oo_helicoidal_extrude \n");
     return NULL;
   }
+  if(node->xOffsetEnd <0)
+	  node->xOffsetEnd = node->xOffset;
   node->xRotate += 90;
   node->nbRotation = fabs(node->angle / 360);
   if(xScale >0) {
