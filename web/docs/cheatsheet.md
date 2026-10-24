@@ -36,6 +36,11 @@
       <div class="func"><code><a href="../reference/sheet/#sheet">sheet</a>(func, imin, imax, ...)</code></div>
       <div>Generate a 3D surface from a Python function</div>
       <div><code>sheet(myfunc, 0, 10, 0, 10).show()</code></div>
+
+      <div class="func"><code><a href="../reference/primitives3d/#patch">patch</a>(outer, holes, proj, grid_spacing_uv, displacement, use_tangents)</code></div>
+      <div>Build a surface from an outer ring and optional hole rings</div>
+      <div><code>patch(circle(10), holes=[circle(6).up(30)]).show()</code></div>
+
   </div>
 </div>
 
@@ -52,11 +57,11 @@
       <div><code>circle(r=5, angle=90).show()</code></div>
 
       <div class="func"><code><a href="../reference/primitives2d/#polygon">polygon</a>(points, paths)</code></div>
-      <div>Create a 2D polygon from a list of points</div>
-      <div><code>polygon([[0,0], [10,0], [5,10]]).show()</code></div>
+      <div>Create a 2D polygon; optional <code>[x,y,r]</code> rounds a corner</div>
+      <div><code>polygon([[0,0], [10,0,2], [5,10]]).show()</code></div>
 
       <div class="func"><code><a href="../reference/primitives2d/#polyline">polyline</a>(points)</code></div>
-      <div>Create an open 2D polyline (e.g. for laser cutting)</div>
+      <div>Create an open 2D/3D polyline (e.g. for laser cutting)</div>
       <div><code>polyline([[0,0], [10,0], [5,10]]).show()</code></div>
 
       <div class="func"><code><a href="../reference/primitives2d/#spline">spline</a>(points, fn)</code></div>
@@ -431,8 +436,8 @@
       <div><code>scad("cube(10);")</code></div>
 
       <div class="func"><code><a href="../reference/io/#nimport">nimport</a>(url)</code></div>
-      <div>GUI only: download a remote <code>.py</code> module and <code>from … import *</code> (not for STL/geometry)</div>
-      <div><code>nimport("https://example.com/mylib.py"); make_widget().show()</code></div>
+      <div>Deprecated (GUI only): download a remote <code>.py</code> and <code>from … import *</code> — use a <a href="../libraries/">Python package</a> instead</div>
+      <div><code>nimport("https://example.com/mylib.py")  # deprecated</code></div>
   </div>
 </div>
 

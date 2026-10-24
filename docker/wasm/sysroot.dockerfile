@@ -7,7 +7,7 @@
 #   docker build -f docker/wasm/sysroot.dockerfile --target wasm-sysroot \
 #     -t pythonscad-wasm-sysroot:local .
 
-ARG EMSCRIPTEN_SDK_TAG=emscripten/emsdk:6.0.10@sha256:e077d54e2b8970575ebc4f185ac1de0b95c05f2b266134d4ba27449af7aebf65
+ARG EMSCRIPTEN_SDK_TAG=emscripten/emsdk:6.0.13@sha256:fb7864e398acfda863dfcea78b8bc8adad359fa60c6a0bbeb845931de64aa68a
 # Pin openscad-wasm for reproducible sysroot builds; bump OPENSCAD_WASM_COMMIT when
 # intentionally syncing upstream recipe/patches.
 ARG OPENSCAD_WASM_COMMIT=ac5cf9b129bdb243fef3862883bd5d64e54fffcb

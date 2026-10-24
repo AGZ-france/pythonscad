@@ -1,7 +1,7 @@
 """ PythonSCAD Stub File for use in editors like Visual Studio Code """
 
 from enum import Enum
-from typing import Any, Iterator, List, Literal, Mapping, Optional, Self, Sequence, TYPE_CHECKING, Union, overload
+from typing import Callable, Any, Iterator, List, Literal, Mapping, Optional, Self, Sequence, TYPE_CHECKING, Union, overload
 
 if TYPE_CHECKING:
     import numpy as np
@@ -202,7 +202,7 @@ class PyOpenSCAD:
         STRAIGHT = "straight"
     def roof(
         self,
-        method: Optional[str] = None,
+        method: str = "voronoi",
         convexity: int = 2,
         fn: Optional[float] = None,
         fa: Optional[float] = None,
@@ -301,7 +301,7 @@ class PyOpenSCAD:
         origin: Optional[Vector2 | "npt.NDArray[np.float64]"] = None,
         offset: Optional[Vector2 | "npt.NDArray[np.float64]"] = None,
         v: Optional[Vector3 | "npt.NDArray[np.float64]"] = None,
-        method: Optional[str] = None,
+        method: str = "centered",
         fn: Optional[float] = None,
         fa: Optional[float] = None,
         fs: Optional[float] = None,
@@ -373,12 +373,14 @@ class PyOpenSCAD:
         ...
 
     def projection(
-        self, cut: Optional[bool] = None, convexity: int = 2
+        self, cut: bool = False, detail: bool = False, convexity: int = 2
     ) -> "PyOpenSCAD":
         """Create a 2D projection from this 3D object.
 
         Args:
             cut: If True, creates a cross-section at z=0.
+            detail: If True (and ``cut`` is False), preserve more silhouette edges.
+                Honored only with the Manifold backend; ignored otherwise.
             convexity: Convexity parameter for rendering. Defaults to 2.
 
         Returns:
@@ -688,18 +690,25 @@ def polygon(
     points: Sequence[Sequence[float]] | "npt.NDArray[np.float64]",
     paths: Sequence[Sequence[int]] | "npt.NDArray[np.int64]" | None = None,
     convexity: int = 2,
+    *,
+    fn: Optional[float] = None,
+    fa: Optional[float] = None,
+    fs: Optional[float] = None,
 ) -> PyOpenSCAD:
     """Create a polygon primitive.
 
     Args:
-        points: List of 2D coordinates defining the polygon vertices.
-                Each point must be a list of exactly 2 numbers [x, y].
-                Must contain at least one point.
+        points: List of coordinates defining the polygon vertices.
+                Each point is ``[x, y]`` or ``[x, y, r]`` where optional ``r``
+                fillets that corner. Must contain at least one point.
         paths: Optional list of paths, where each path is a list of indices
                into the points list. If specified, must contain at least one path.
                Used to define holes or complex polygons.
         convexity: Convexity parameter for rendering optimization. Must be >= 1.
                    Defaults to 2.
+        fn: Number of fragments for corner-fillet arcs.
+        fa: Minimum angle for each fillet-arc fragment.
+        fs: Minimum size for each fillet-arc fragment.
 
     Returns:
         A 2D geometric object.
@@ -709,7 +718,11 @@ def polygon(
 def polyline(
     points: Sequence[Sequence[float]] | "npt.NDArray[np.float64]",
 ) -> PyOpenSCAD:
-    """Create an open 2D polyline through ``points``."""
+    """Create an open polyline through ``points``.
+
+    Points are ``[x, y]`` (2D) or ``[x, y, z]``. If any point has a non-zero
+    ``z``, the result is a 3D polyline.
+    """
     ...
 
 def text(
@@ -1157,7 +1170,7 @@ def rotate_extrude(
     origin: Optional[Vector2 | "npt.NDArray[np.float64]"] = None,
     offset: Optional[Vector2 | "npt.NDArray[np.float64]"] = None,
     v: Optional[Vector3 | "npt.NDArray[np.float64]"] = None,
-    method: Optional[str] = None,
+    method: str = "centered",
     fn: Optional[float] = None,
     fa: Optional[float] = None,
     fs: Optional[float] = None,
@@ -1224,13 +1237,18 @@ def minkowski(obj1: PyOpenSCADs, obj2: PyOpenSCADs, convexity: int = 2) -> PyOpe
     ...
 
 def projection(
-    obj: PyOpenSCADs, cut: Optional[bool] = None, convexity: int = 2
+    obj: PyOpenSCADs,
+    cut: bool = False,
+    detail: bool = False,
+    convexity: int = 2,
 ) -> PyOpenSCAD:
     """Create a 2D projection from a 3D object.
 
     Args:
         obj: 3D object to project.
         cut: If True, creates a cross-section at z=0.
+        detail: If True (and ``cut`` is False), preserve more silhouette edges.
+            Honored only with the Manifold backend; ignored otherwise.
         convexity: Convexity parameter for rendering. Defaults to 2.
 
     Returns:
@@ -1325,7 +1343,7 @@ def fill(*objects: PyOpenSCADs) -> PyOpenSCAD:
 
 def roof(
     obj: PyOpenSCAD,
-    method: Optional[str] = None,
+    method: str = "voronoi",
     convexity: int = 2,
     fn: Optional[float] = None,
     fa: Optional[float] = None,
@@ -1722,6 +1740,36 @@ def concat(*objects: PyOpenSCADs) -> PyOpenSCAD:
     """
     ...
 
+def patch(
+    outer: Union[Sequence[Vector3], PyOpenSCAD],
+    holes: Optional[Sequence[Union[Sequence[Vector3], PyOpenSCAD]]] = None,
+    proj: Optional[Callable[[Vector3], Vector2]] = None,
+    grid_spacing_uv: float = 1.0,
+    displacement: Optional[Callable[[Vector3], float]] = None,
+    use_tangents: bool = False,
+) -> PyOpenSCAD:
+    """Build a triangulated surface from an outer boundary ring and holes.
+
+    Args:
+        outer: The outer boundary ring, as a list of 3D points or a 2D shape.
+        holes: Zero or more inner boundary rings to cut out of the surface,
+               each a list of 3D points or a 2D shape.
+        proj: Optional function mapping a 3D point to 2D (u, v) coordinates,
+              used to flatten the boundary for triangulation. If not given,
+              chosen automatically based on the shape of the input.
+        grid_spacing_uv: Target spacing between interior mesh points, in the
+              flattened domain's own units. Defaults to 1.0.
+        displacement: Optional function mapping a 3D point to a scalar,
+              applied along the local surface normal at interior points.
+        use_tangents: If True, use each ring's own plane normal as a tangent
+              to bow the surface instead of a flat interpolation between
+              rings. Only meaningful when a ring is given as a 2D shape.
+
+    Returns:
+        A 3D surface object.
+    """
+    ...
+
 def sheet(
     func,
     imin: float,
@@ -1757,7 +1805,7 @@ def size(obj: PyOpenSCADs) -> Optional[Union[Vector2, Vector3]]:
     """Get the size dimensions of an object's bounding box."""
     ...
 
-def position(obj: PyOpenSCADs) -> Optional[Vector3]:
+def position(obj: PyOpenSCADs) -> Optional[Union[Vector2, Vector3]]:
     """Get the minimum corner of an object's bounding box."""
     ...
 

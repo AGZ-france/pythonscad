@@ -302,9 +302,10 @@ set(PYTHONSCAD_ECHO_EXPORT_FILES
   "${TEST_PYTHONSCAD_ECHO_DIR}/issue232-lookup-file-export-deprecation.py"
 )
 list(REMOVE_ITEM PYTHONSCAD_ECHO_FILES ${PYTHONSCAD_ECHO_EXPORT_FILES})
-# GUI pointer callbacks are not exposed in headless builds.
+# GUI pointer callbacks and nimport() are not exposed in headless builds.
 if(HEADLESS)
   list(REMOVE_ITEM PYTHONSCAD_ECHO_FILES "${TEST_PYTHONSCAD_ECHO_DIR}/gui_callback_abi.py")
+  list(REMOVE_ITEM PYTHONSCAD_ECHO_FILES "${TEST_PYTHONSCAD_ECHO_DIR}/nimport-deprecation.py")
 endif()
 # Exclude libfive tests if libfive is not enabled
 if(NOT ENABLE_LIBFIVE)
@@ -403,6 +404,7 @@ list(APPEND ECHO_FILES ${FUNCTION_FILES} ${MISC_FILES} ${REDEFINITION_FILES}
   ${TEST_SCAD_DIR}/3D/features/for-tests.scad
   ${TEST_SCAD_DIR}/3D/features/rotate-parameters.scad
   ${TEST_SCAD_DIR}/3D/features/linear_extrude-parameter-tests.scad
+  ${TEST_SCAD_DIR}/3D/features/sphere-octa-tests.scad
   ${TEST_SCAD_DIR}/misc/expression-evaluation-tests.scad
   ${TEST_SCAD_DIR}/misc/echo-tests.scad
   ${TEST_SCAD_DIR}/misc/assert-fail1-test.scad
@@ -1396,6 +1398,14 @@ add_cmdline_test(pythonscadpreview   EXPERIMENTAL OPENSCAD SUFFIX png FILES ${TE
 # 2D boolean seam fillets (issue #1004): validate via SVG (headless-safe).
 add_cmdline_test(pythonscad2d        EXPERIMENTAL OPENSCAD SUFFIX svg FILES ${PYTHONSCAD_2D_SVG_FILES} ARGS --render --trust-python)
 add_cmdline_test(pythonscadecho      EXPERIMENTAL OPENSCAD SUFFIX echo FILES ${PYTHONSCAD_ECHO_FILES} ARGS --trust-python)
+# nimport download logs include machine-local library paths; keep the portable
+# DEPRECATED line + script prints in the golden file.
+if(NOT HEADLESS)
+  add_line_exclusion_for_test(pythonscadecho nimport-deprecation
+    [[^WARNING: Downloading to ]])
+  add_line_exclusion_for_test(pythonscadecho nimport-deprecation
+    [[^ERROR: ]])
+endif()
 # Same group name so goldens stay under tests/regression/pythonscadecho/.
 add_cmdline_test(pythonscadecho      EXPERIMENTAL OPENSCAD SUFFIX echo FILES ${PYTHONSCAD_ECHO_EXPORT_FILES} ARGS --trust-python --render)
 add_cmdline_test(pythonscadlaser     EXPERIMENTAL OPENSCAD SUFFIX svg FILES ${PYTHONSCAD_LASER_FILES}            ARGS --trust-python)
@@ -1483,6 +1493,14 @@ if (ENABLE_LIB3MF_TESTS)
     add_export_files_test(pythonscad-export-3mf
         EXPERIMENTAL
         FILES ${PYTHONSCAD_EXPORT_3MF_FILES}
+    )
+    # Not globbed with the group above: lib3mf 2 only welds coincident
+    # vertices when predictible-output is on, and lib3mf 1 always does.
+    # The flag keeps the golden the same on both backends.
+    add_export_files_test(pythonscad-export-3mf-degenerate
+        EXPERIMENTAL
+        FILES "${CCSD}/data/pythonscad-3mf-degenerate/degenerate-triangle.py"
+        ARGS --enable=predictible-output
     )
 endif()
 add_export_files_test(pythonscad-export-obj
@@ -1623,6 +1641,14 @@ if(ENABLE_PYTHON)
   )
   set_property(TEST repl-smoke PROPERTY ENVIRONMENT ${CTEST_ENVIRONMENT})
 
+  # Serialize interactive CLI smokes: concurrent --repl/--ipython
+  # pythonscad processes have been associated with flaky SIGBUS/SIGSEGV
+  # under Homebrew Python 3.15 on macos-26 (#1138 / #1149).
+  set_tests_properties(ipython-smoke ipython-fallback repl-smoke
+    PROPERTIES RUN_SERIAL TRUE
+    RESOURCE_LOCK "pythonscad_interactive_cli"
+  )
+
   add_test(NAME version-helpers CONFIGURATIONS Default
     COMMAND ${Python3_EXECUTABLE} -Xutf8=1
       ${CMAKE_CURRENT_SOURCE_DIR}/test_version_helpers.py
@@ -1693,6 +1719,40 @@ if(ENABLE_PYTHON)
   )
   set_property(TEST ipython-precedence PROPERTY ENVIRONMENT ${CTEST_ENVIRONMENT})
   set_property(TEST ipython-precedence PROPERTY SKIP_REGULAR_EXPRESSION "^SKIP-")
+endif()
+
+# Host-side check for the delayed-release SHA compare used by
+# .github/workflows/update-submodule-manifold.yml. Independent of
+# ENABLE_PYTHON: it only needs bash, git, and the helper script.
+if(Python3_EXECUTABLE)
+  add_test(NAME compare-git-release CONFIGURATIONS Default
+    COMMAND ${Python3_EXECUTABLE} -Xutf8=1
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_compare_git_release.py
+      ${CMAKE_SOURCE_DIR}/scripts/ci/compare-git-release.sh
+  )
+  set_property(TEST compare-git-release PROPERTY ENVIRONMENT ${CTEST_ENVIRONMENT})
+  set_property(TEST compare-git-release PROPERTY SKIP_REGULAR_EXPRESSION "^SKIP")
+endif()
+
+# Host-side check that the macOS Homebrew dep script (and the qt5
+# get-dependencies profile) stay Qt6-only on macOS.
+if(Python3_EXECUTABLE)
+  add_test(NAME macosx-build-homebrew-qt6 CONFIGURATIONS Default
+    COMMAND ${Python3_EXECUTABLE} -Xutf8=1
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_macosx_build_homebrew.py
+  )
+  set_property(TEST macosx-build-homebrew-qt6 PROPERTY ENVIRONMENT ${CTEST_ENVIRONMENT})
+endif()
+
+# Host-side check that scripts/get-dependencies.py never drops a profile's
+# pre_commands/post_commands (e.g. the macOS Qt tap/pin sequence) when
+# combining profiles, regardless of combination order (#1134).
+if(Python3_EXECUTABLE)
+  add_test(NAME get-dependencies-profile-merge CONFIGURATIONS Default
+    COMMAND ${Python3_EXECUTABLE} -Xutf8=1
+      ${CMAKE_CURRENT_SOURCE_DIR}/test_get_dependencies_profile_merge.py
+  )
+  set_property(TEST get-dependencies-profile-merge PROPERTY ENVIRONMENT ${CTEST_ENVIRONMENT})
 endif()
 
 if(NOT ENABLE_LIBFIVE)

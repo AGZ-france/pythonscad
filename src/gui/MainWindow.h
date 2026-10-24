@@ -157,6 +157,7 @@ private:
   void setupDocks();
   void setupMenusAndActions();
   void restoreWindowState();
+  void restoreToolBarVisibility();
   void openRemainingFiles(const QStringList& filenames);
   /// First CLI path was a missing design file; tab UI deferred until user answers create prompt.
   QString deferredCliMissingFile;
@@ -555,6 +556,9 @@ private:
   /// Cross-tab geometry ownership acknowledged for the current export action.
   EditorInterface *approvedGeometrySourceEditor_{nullptr};
   EditorInterface *approvedGeometryTargetEditor_{nullptr};
+  std::unordered_map<QString, QString> exportPaths;  // for each file type, where it was exported to last
+  // look up the last export path and generate one if not found
+  QString exportPath(const QString& suffix, const QString& basename = "");
   int lastParserErrorPos{-1};  // last highlighted error position
   int tabCount = 0;
   ExportPdfPaperSize sizeString2Enum(const QString& current);

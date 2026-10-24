@@ -625,10 +625,13 @@ PyMethodDef PyOpenSCADFunctions[] = {
    "2D polygon from points and paths.\n"
    "polygon(points=[...])\n"
    "polygon(points=[...], paths=[...])\n"
-   "polygon(points=[...], paths=[...], convexity=2)"},
+   "polygon(points=[...], paths=[...], convexity=2)\n"
+   "Each point is [x, y] or [x, y, r] where r fillets the corner.\n"
+   "Use fn/fa/fs to control fillet arc subdivision."},
   {"polyline", (PyCFunction)python_polyline, METH_VARARGS | METH_KEYWORDS,
-   "Open 2D polyline through points.\n"
-   "polyline(points=[...])"},
+   "Open 2D or 3D polyline through points.\n"
+   "polyline(points=[...])\n"
+   "Points are [x, y] (2D) or [x, y, z] (3D if any z != 0)."},
   {"spline", (PyCFunction)python_spline, METH_VARARGS | METH_KEYWORDS,
    "Smooth curve through points.\n"
    "spline(points=[...])\n"
@@ -836,6 +839,8 @@ PyMethodDef PyOpenSCADFunctions[] = {
    "sheet(func, imin=0, imax=1, jmin=0, jmax=1)\n"
    "sheet(func, imin=0, imax=1, jmin=0, jmax=1, fs=0.5)\n"
    "sheet(func, imin=0, imax=1, jmin=0, jmax=1, iclose=True, jclose=True)"},
+  {"patch", (PyCFunction)python_patch, METH_VARARGS | METH_KEYWORDS,
+   "patch(outer, holes=None, proj=None, grid_spacing_uv=1.0, displacement=None, use_tangents=False)"},
   {"mesh", (PyCFunction)python_mesh, METH_VARARGS | METH_KEYWORDS,
    "Get triangle mesh vertices/faces of an object.\n"
    "mesh(obj)\n"
@@ -938,8 +943,9 @@ PyMethodDef PyOpenSCADFunctions[] = {
   {"set_modal_dialog_active", python_set_modal_dialog_active, METH_VARARGS,
    "Suspend python_lock()/python_unlock() while a modal PyQt6 dialog is open"},
   {"nimport", (PyCFunction)python_nimport, METH_VARARGS | METH_KEYWORDS,
-   "Import a Python model from a URL (not an STL).\n"
-   "nimport(url=\"https://example.com/model.py\")"},
+   "Deprecated: download and star-import a single .py file from a URL.\n"
+   "Prefer a published Python package; see https://www.pythonscad.org/libraries/\n"
+   "nimport(url=\"https://example.com/model.py\")  # deprecated"},
   {"qapp_ptr", python_qapp_ptr, METH_NOARGS,
    "Get raw pointer to the Qt application.\n"
    "qapp_ptr()"},

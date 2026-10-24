@@ -30,6 +30,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 #include <string>
@@ -1908,9 +1909,50 @@ static uint64_t fnv1a_mix(uint64_t h, const char *buf, Py_ssize_t len)
   return h;
 }
 
+static uint64_t python_func_hash_rec(PyObject *func, int depth, uint64_t h);
+
+// Hashes a single Python value the same way, whichever context it was found
+// in (a referenced global, a default value, a closure cell, ...): a
+// function recurses into its own bytecode hash (repr() of a function
+// embeds its address and is unstable), a module/builtin/class hashes its
+// qualified name (repr() is likewise unstable there), and anything else
+// hashes its repr() (assumed stable / address-free for ordinary values).
+static uint64_t python_func_hash_value_rec(PyObject *val, int depth, uint64_t h)
+{
+  if (val == nullptr) return h;
+
+  if (PyFunction_Check(val)) {
+    // recurse: hash the function's own bytecode instead of an unstable repr()
+    h = python_func_hash_rec(val, depth + 1, h);
+  } else if (PyModule_Check(val) || PyCFunction_Check(val) || PyType_Check(val)) {
+    // modules/builtins/classes: only the qualified name is stable, not repr()
+    PyObject *qn = PyObject_GetAttrString(val, "__name__");
+    if (qn && PyUnicode_Check(qn)) {
+      Py_ssize_t qlen;
+      const char *qbuf = PyUnicode_AsUTF8AndSize(qn, &qlen);
+      if (qbuf) h = fnv1a_mix(h, qbuf, qlen);
+    } else {
+      PyErr_Clear();
+    }
+    Py_XDECREF(qn);
+  } else {
+    // "real" values: repr() is stable here (no address embedded)
+    PyObject *repr = PyObject_Repr(val);
+    if (repr && PyUnicode_Check(repr)) {
+      Py_ssize_t rlen;
+      const char *rbuf = PyUnicode_AsUTF8AndSize(repr, &rlen);
+      if (rbuf) h = fnv1a_mix(h, rbuf, rlen);
+    } else {
+      PyErr_Clear();
+    }
+    Py_XDECREF(repr);
+  }
+  return h;
+}
+
 static uint64_t python_func_hash_rec(PyObject *func, int depth, uint64_t h)
 {
-  if (depth > 6) return h;  // Rekursionsschutz gegen sich gegenseitig aufrufende Funktionen
+  if (depth > 6) return h;  // guard against mutually-recursive functions
 
   PyObject *code = PyObject_GetAttrString(func, "__code__");
   if (code == nullptr) {
@@ -1934,37 +1976,106 @@ static uint64_t python_func_hash_rec(PyObject *func, int depth, uint64_t h)
     Py_ssize_t n = PyTuple_Size(co_names);
     for (Py_ssize_t i = 0; i < n; i++) {
       PyObject *name = PyTuple_GetItem(co_names, i);  // borrowed
-      PyObject *val = PyDict_GetItem(globals, name);  // borrowed, ggf. NULL
+      PyObject *val = PyDict_GetItem(globals, name);  // borrowed, may be NULL
       if (val == nullptr) continue;
-
-      if (PyFunction_Check(val)) {
-        // rekursiv: eigener Bytecode-Hash statt instabiler repr()
-        h = python_func_hash_rec(val, depth + 1, h);
-      } else if (PyModule_Check(val) || PyCFunction_Check(val) || PyType_Check(val)) {
-        // Module/Builtins/Klassen: nur der qualifizierte Name ist stabil, nicht repr()
-        PyObject *qn = PyObject_GetAttrString(val, "__name__");
-        if (qn && PyUnicode_Check(qn)) {
-          Py_ssize_t qlen;
-          const char *qbuf = PyUnicode_AsUTF8AndSize(qn, &qlen);
-          if (qbuf) h = fnv1a_mix(h, qbuf, qlen);
-        } else {
-          PyErr_Clear();
-        }
-        Py_XDECREF(qn);
-      } else {
-        // "echte" Werte: repr() ist hier stabil (keine Adresse enthalten)
-        PyObject *repr = PyObject_Repr(val);
-        if (repr && PyUnicode_Check(repr)) {
-          Py_ssize_t rlen;
-          const char *rbuf = PyUnicode_AsUTF8AndSize(repr, &rlen);
-          if (rbuf) h = fnv1a_mix(h, rbuf, rlen);
-        }
-        Py_XDECREF(repr);
-      }
+      h = python_func_hash_value_rec(val, depth, h);
     }
   }
   Py_XDECREF(co_names);
   Py_XDECREF(globals);
+
+  // Positional/keyword defaults: func.__defaults__ is a tuple (or None) of
+  // the values bound to the trailing positional parameters that weren't
+  // supplied at call time - e.g. the captured 'amount' in
+  // "def make_disp(amount): return lambda p: amount". Two closures built
+  // from the same factory with different 'amount' values must NOT hash the
+  // same, or patch()'s geometry cache would return one's result for the
+  // other.
+  PyObject *defaults = PyObject_GetAttrString(func, "__defaults__");
+  if (defaults == nullptr) {
+    PyErr_Clear();
+  } else {
+    if (PyTuple_Check(defaults)) {
+      Py_ssize_t n = PyTuple_Size(defaults);
+      for (Py_ssize_t i = 0; i < n; i++) {
+        h = python_func_hash_value_rec(PyTuple_GetItem(defaults, i), depth, h);  // borrowed
+      }
+    }
+    Py_DECREF(defaults);
+  }
+
+  // Keyword-only defaults: func.__kwdefaults__ is a dict (or None). Sort
+  // the keys first so the hash doesn't depend on (unspecified) dict
+  // iteration order.
+  PyObject *kwdefaults = PyObject_GetAttrString(func, "__kwdefaults__");
+  if (kwdefaults == nullptr) {
+    PyErr_Clear();
+  } else {
+    if (PyDict_Check(kwdefaults)) {
+      PyObject *keys = PyDict_Keys(kwdefaults);
+      if (keys) {
+        if (PyList_Sort(keys) == 0) {
+          Py_ssize_t n = PyList_Size(keys);
+          for (Py_ssize_t i = 0; i < n; i++) {
+            PyObject *key = PyList_GetItem(keys, i);  // borrowed
+            if (PyUnicode_Check(key)) {
+              Py_ssize_t klen;
+              const char *kbuf = PyUnicode_AsUTF8AndSize(key, &klen);
+              if (kbuf) h = fnv1a_mix(h, kbuf, klen);
+            }
+            PyObject *val = PyDict_GetItem(kwdefaults, key);  // borrowed
+            h = python_func_hash_value_rec(val, depth, h);
+          }
+        } else {
+          PyErr_Clear();
+        }
+        Py_DECREF(keys);
+      } else {
+        PyErr_Clear();
+      }
+    }
+    Py_DECREF(kwdefaults);
+  }
+
+  // Closure-cell contents: func.__closure__ is a tuple of cell objects (or
+  // None) holding the values captured from an enclosing scope, aligned
+  // index-for-index with code.co_freevars. This is exactly the mechanism a
+  // factory like "def make_proj(u_scale): return lambda p: [p.x*u_scale,
+  // p.y]" uses to hand patch() a per-call proj()/displacement() - without
+  // hashing the cell contents, two such closures with different captured
+  // values are indistinguishable to the cache key.
+  PyObject *closure = PyObject_GetAttrString(func, "__closure__");
+  if (closure == nullptr) {
+    PyErr_Clear();
+  } else {
+    if (PyTuple_Check(closure)) {
+      PyObject *freevars = PyObject_GetAttrString(code, "co_freevars");
+      Py_ssize_t n = PyTuple_Size(closure);
+      for (Py_ssize_t i = 0; i < n; i++) {
+        if (freevars && PyTuple_Check(freevars) && i < PyTuple_Size(freevars)) {
+          PyObject *name = PyTuple_GetItem(freevars, i);  // borrowed
+          if (name && PyUnicode_Check(name)) {
+            Py_ssize_t nlen;
+            const char *nbuf = PyUnicode_AsUTF8AndSize(name, &nlen);
+            if (nbuf) h = fnv1a_mix(h, nbuf, nlen);
+          }
+        }
+        PyObject *cell = PyTuple_GetItem(closure, i);  // borrowed
+        if (cell != nullptr) {
+          PyObject *cellval = PyCell_Get(cell);  // new reference, or NULL if empty
+          if (cellval != nullptr) {
+            h = python_func_hash_value_rec(cellval, depth, h);
+            Py_DECREF(cellval);
+          } else {
+            PyErr_Clear();
+          }
+        }
+      }
+      Py_XDECREF(freevars);
+    }
+    Py_DECREF(closure);
+  }
+
   Py_XDECREF(bytes);
   Py_XDECREF(dumps);
   Py_XDECREF(marshal);
@@ -2451,12 +2562,96 @@ static void windows_reattach_console_for_repl(void)
 // pollute `dir()` with a couple hundred names regardless of what the
 // user actually intended to use.
 //
+// Drive the session through Python's already-initialized `sys.stdin`
+// rather than `PyRun_AnyFileFlags(stdin)`. The latter builds a second
+// buffered reader on the same C FILE*, which SIGBUS-es inside
+// `_buffered_init` on Homebrew Python 3.15 (mimalloc-backed) when the
+// session later imports ctypes/sysconfig (#1138). `--ipython` already
+// avoids that path and works; match that IO model here.
+//
 // This helper assumes Py_IsInitialized() is already true; callers must
 // gate it behind that check.
 static void run_basic_python_repl(void)
 {
-  pymain_run_interactive_hook();
-  PyRun_AnyFileFlags(stdin, "<stdin>", nullptr);
+  // Only enable readline / __interactivehook__ on a real TTY. CPython's
+  // own non-interactive SimpleFile path skips the hook; loading it for
+  // piped CI scripts has been implicated in flaky SIGBUS under Homebrew
+  // Python 3.15 + ctypes (#1138).
+  //
+  // TTY → interactive >>> loop; pipe/file → exec the whole script once
+  // (same contract as non-tty PyRun_SimpleFile).
+  // Run the bootstrap inside a function so its `sys`/`code` locals cannot
+  // be clobbered by a piped user script that assigns those names in
+  // `__main__` (PyRun_SimpleString shares that dict). Flush in `finally`
+  // after a piped exec: non-tty stdout is fully buffered and we return
+  // without Py_Finalize, so prints before an exception would otherwise
+  // be lost (CI smokes capture stdout for the OK marker).
+  int is_tty = 0;
+  {
+    PyObject *sysmod = PyImport_ImportModule("sys");
+    if (sysmod != nullptr) {
+      PyObject *stdin_obj = PyObject_GetAttrString(sysmod, "stdin");
+      if (stdin_obj != nullptr) {
+        PyObject *r = PyObject_CallMethod(stdin_obj, "isatty", nullptr);
+        if (r != nullptr) {
+          is_tty = PyObject_IsTrue(r);
+          Py_DECREF(r);
+        } else {
+          PyErr_Clear();
+        }
+        Py_DECREF(stdin_obj);
+      } else {
+        PyErr_Clear();
+      }
+      Py_DECREF(sysmod);
+    } else {
+      PyErr_Clear();
+    }
+  }
+  if (is_tty) {
+    pymain_run_interactive_hook();
+  }
+
+  static const char *boot =
+    "def _pythonscad_run_basic_repl():\n"
+    "    import code, sys\n"
+    "    _ns = sys.modules['__main__'].__dict__\n"
+    "    if sys.stdin.isatty():\n"
+    "        code.interact(local=_ns)\n"
+    "    else:\n"
+    "        _src = sys.stdin.read()\n"
+    "        try:\n"
+    "            if _src:\n"
+    "                exec(compile(_src, '<stdin>', 'exec'), _ns)\n"
+    "        finally:\n"
+    "            try:\n"
+    "                sys.stdout.flush()\n"
+    "                sys.stderr.flush()\n"
+    "            except Exception:\n"
+    "                pass\n"
+    "_pythonscad_run_basic_repl()\n"
+    "del _pythonscad_run_basic_repl\n";
+  if (PyRun_SimpleString(boot) != 0) {
+    // Exception already printed by PyRun_SimpleString; clear so callers
+    // that fall through (e.g. ipython fallback) do not inherit it.
+    PyErr_Clear();
+  }
+}
+
+// On Apple, prefer the system malloc for CPython's memory domains when
+// the user has not already set PYTHONMALLOC. Homebrew Python 3.15 links
+// libmimalloc; under --repl/--ipython, `import ctypes` can SIGBUS/SIGSEGV
+// inside `_buffered_init` with that allocator (#1138, #1149). Must run
+// before Py_Initialize / Py_PreInitialize. No-op on free-threaded builds
+// where mimalloc is required.
+static void prefer_system_malloc_for_embedded_python(void)
+{
+#if defined(__APPLE__) && !defined(Py_GIL_DISABLED)
+  if (std::getenv("PYTHONMALLOC") == nullptr) {
+    // setenv(..., 0) does not overwrite an existing value.
+    (void)setenv("PYTHONMALLOC", "malloc", 0);
+  }
+#endif
 }
 
 // Open the basic embedded CPython REPL on stdin. Reachable explicitly
@@ -2473,6 +2668,7 @@ int repl(void)
   // CRT-orphaned ones GUI-subsystem children get on Windows.
   windows_reattach_console_for_repl();
 #endif
+  prefer_system_malloc_for_embedded_python();
   initPython(PlatformUtils::applicationPath(), "", nullptr);
   if (!Py_IsInitialized()) {
     fprintf(stderr,
@@ -2552,6 +2748,7 @@ int ipython(const std::vector<std::string>& args)
   // fallback below inherits a working console when IPython is missing.
   windows_reattach_console_for_repl();
 #endif
+  prefer_system_malloc_for_embedded_python();
   initPython(PlatformUtils::applicationPath(), "", nullptr);
   if (!Py_IsInitialized()) {
     fprintf(stderr,
