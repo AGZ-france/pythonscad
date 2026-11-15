@@ -59,6 +59,10 @@ private:
   // UI state captured before a teardown and reapplied by rebuildWidgets().
   std::map<QString, bool> savedGroupStates;
   int savedScrollValue = 0;
+  /// mtime+size fingerprint of the companion .json (empty if missing / never primed).
+  std::string jsonAutoReloadId;
+  /// True while resetForNewDocument() runs processEvents(); blocks re-entrant setParameters().
+  bool resettingForNewDocument = false;
 
 public:
   ParameterWidget(QWidget *parent = nullptr);
@@ -68,12 +72,32 @@ public:
   void readFile(const QString& scadFile);
   void saveFile(const QString& scadFile);
   void saveBackupFile(const QString& scadFile);
+  void removeBackupFile(const QString& scadFile);
   void setParameters(const SourceFile *sourceFile, const std::string& source);
   QByteArray getSessionState();
   void setSessionState(const QByteArray& state);
   void applyParameters(SourceFile *sourceFile);
   bool childHasFocus();
   bool isModified() const { return modified; }
+
+  /// Companion customizer JSON path for a design file (same basename, .json extension).
+  static QString companionJsonPath(const QString& scadFile);
+  /// Refresh \c jsonAutoReloadId from the companion file's current mtime+size.
+  void primeJsonAutoReloadId(const QString& scadFile);
+  void setJsonAutoReloadId(std::string id) { jsonAutoReloadId = std::move(id); }
+  const std::string& getJsonAutoReloadId() const { return jsonAutoReloadId; }
+  /// Like design-file \c fileChangedOnDisk: updates the fingerprint and returns true on change.
+  bool jsonFileChangedOnDisk(const QString& scadFile);
+  /// Re-read companion JSON into the preset combo, preserving selection by preset name.
+  /// Returns true if the sidecar was reloaded (caller may need to recompile).
+  /// On parse failure, keeps prior presets and returns false.
+  bool reloadSetsFromDisk(const QString& scadFile);
+  /// Select a named preset if present; otherwise fall back to design default.
+  void selectPresetByName(const QString& name);
+  /// Preset name for the current combo selection (empty for design default).
+  QString currentPresetName() const;
+  /// Named preset from a session \c customizerState blob (empty for design default / unreadable).
+  static QString selectedPresetNameFromSessionState(const QByteArray& customizerState);
 
 public slots:
   void setModified(bool modified = true);
@@ -114,5 +138,6 @@ protected:
                                                 DescriptionStyle descriptionStyle);
   void captureUiState();
   QString getJsonFile(const QString& scadFile);
+  void rebuildPresetCombo(const QString& selectedName);
   void cleanSets();
 };

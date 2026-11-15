@@ -122,6 +122,15 @@ std::string PlatformUtils::userConfigPath()
   return "";
 }
 
+std::string PlatformUtils::pythonUserConfigPath()
+{
+  const fs::path config_path{getXdgConfigDir() / "PythonSCAD"};
+  if (config_path.empty()) {
+    return "";
+  }
+  return config_path.generic_string();
+}
+
 unsigned long PlatformUtils::stackLimit()
 {
 #ifndef __EMSCRIPTEN__
@@ -277,4 +286,14 @@ const std::string PlatformUtils::sysinfo(bool extended)
 
 void PlatformUtils::ensureStdIO()
 {
+}
+
+FILE *PlatformUtils::fopen(const fs::path& path, const char *mode)
+{
+  return ::fopen(path.c_str(), mode);
+}
+
+int PlatformUtils::stat(const fs::path& path, struct ::stat& st)
+{
+  return ::stat(path.c_str(), &st);
 }

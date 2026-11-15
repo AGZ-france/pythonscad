@@ -36,10 +36,6 @@ const Feature Feature::ExperimentalPythonSeparateObjects(
   "unioning them, so 3MF export can write one object per part.");
 const Feature Feature::ExperimentalVxORenderersIndexing("vertex-object-renderers-indexing",
                                                         "Enable indexing in vertex object renderers");
-const Feature Feature::ExperimentalImportFunction(
-  "import-function", "Enable import function returning data instead of geometry.");
-const Feature Feature::ExperimentalObjectFunction(
-  "object-function", "Enable object function to allow user creation of objects.");
 const Feature Feature::ExperimentalPredictibleOutput(
   "predictible-output",
   "Attempt to produce predictible, diffable outputs (e.g. sorting the STL, or remeshing in a determined "
@@ -52,9 +48,6 @@ const Feature Feature::ExperimentalDiscretizationByError(
 const Feature Feature::ExperimentalAiFeatures("ai-features",
                                               "Enable AI features (Note: AI integration is under "
                                               "development and does not connect to external APIs yet).");
-const Feature Feature::ExperimentalUnicodeIdentifiers(
-  "unicode-identifiers",
-  "Allow non-ASCII characters in identifiers, following Unicode Standard Annex #31.");
 
 #ifdef ENABLE_PYTHON
 const Feature Feature::ExperimentalPythonEngine(

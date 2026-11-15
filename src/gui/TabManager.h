@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
+#include <QPointer>
 #include <QSet>
 #include <cstddef>
 #include <functional>
@@ -102,7 +104,7 @@ public:
   // Session file schema version. Increment when the format changes and add a
   // migration step in migrateSession().  Old files without a version field are
   // treated as version 1.
-  static constexpr int SESSION_VERSION = 6;
+  static constexpr int SESSION_VERSION = 7;
 
 public:
   static constexpr const int FIND_HIDDEN = 0;
@@ -125,6 +127,8 @@ private:
   MainWindow *parent;
   QTabWidget *tabWidget;
   bool use_gvim = false;
+  QList<QPointer<EditorInterface>> pendingTabCloses;
+  void finishPendingTabCloses();
 
   bool maybeSave(int);
   /// Tab title for message boxes (no `&` doubling; see getEditorTabName for QTabWidget labels).
@@ -156,7 +160,6 @@ private slots:
   void showTabHeaderContextMenu(const QPoint&);
 
   void stopAnimation();
-  void updateFindState();
 
   void onHyperlinkIndicatorClicked(int pos);
 

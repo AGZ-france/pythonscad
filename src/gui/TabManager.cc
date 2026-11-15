@@ -42,6 +42,7 @@
 #include <functional>
 #include <sstream>
 #include <vector>
+#include <utility>
 
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS) && !defined(Q_OS_WASM)
 #include <unistd.h>
@@ -583,7 +584,6 @@ TabManager::TabManager(MainWindow *o, const QString& filename)
           &TabManager::showTabHeaderContextMenu);
 
   connect(tabWidget, &QTabWidget::currentChanged, this, &TabManager::stopAnimation);
-  connect(tabWidget, &QTabWidget::currentChanged, this, &TabManager::updateFindState);
   connect(tabWidget, &QTabWidget::currentChanged, this, &TabManager::tabSwitched);
 
   connect(parent->editActionZoomTextIn, &QAction::triggered, this, &TabManager::zoomIn);
@@ -628,6 +628,7 @@ void TabManager::tabSwitched(int x)
 
   editor = (EditorInterface *)tabWidget->widget(x);
   parent->activeEditor = editor;
+  parent->refreshFindIndicators();
   parent->parameterDock->setWidget(editor->parameterWidget);
 
   parent->editActionUndo->setEnabled(editor->canUndo());
@@ -651,7 +652,25 @@ void TabManager::tabSwitched(int x)
 void TabManager::closeTabRequested(int x)
 {
   assert(tabWidget != nullptr);
-  if (!maybeSave(x)) return;
+  // The worker and reentrant parsing code may still use the editor/customizer
+  // and preview tree. Request cancellation, but defer destruction until idle.
+  if (GuiLocker::isLocked()) {
+    auto *closingEditor = qobject_cast<EditorInterface *>(tabWidget->widget(x));
+    if (!closingEditor) return;
+    parent->cancelRenderForEditor(closingEditor);
+    if (!pendingTabCloses.contains(closingEditor)) {
+      const bool startTimer = pendingTabCloses.isEmpty();
+      pendingTabCloses.append(closingEditor);
+      if (startTimer) QTimer::singleShot(50, this, &TabManager::finishPendingTabCloses);
+    }
+    return;
+  }
+  {
+    // A save dialog runs a nested event loop. Do not let auto-reload start a
+    // new render between the idle check above and destruction below.
+    const GuiLocker lock;
+    if (!maybeSave(x)) return;
+  }
 
   auto *closingEditor = qobject_cast<EditorInterface *>(tabWidget->widget(x));
   assert(closingEditor != nullptr);
@@ -666,12 +685,34 @@ void TabManager::closeTabRequested(int x)
   delete closingEditor;
 }
 
+void TabManager::finishPendingTabCloses()
+{
+  if (GuiLocker::isLocked()) {
+    QTimer::singleShot(50, this, &TabManager::finishPendingTabCloses);
+    return;
+  }
+  // Resolve indices only now: tabs may have moved or another close may have
+  // removed a queued editor in the meantime.
+  const auto pending = std::exchange(pendingTabCloses, {});
+  for (const auto& editor : pending) {
+    if (!editor) continue;
+    const int index = tabWidget->indexOf(editor);
+    if (index < 0) continue;
+    if (tabWidget->count() == 1) {
+      closeCurrentTab();
+      return;
+    }
+    closeTabRequested(index);
+  }
+}
+
 void TabManager::closeCurrentTab()
 {
   assert(tabWidget != nullptr);
 
   /* Close tab or close the current window if only one tab is open. */
-  if (tabWidget->count() > 1) this->closeTabRequested(tabWidget->currentIndex());
+  if (tabWidget->count() > 1 || GuiLocker::isLocked())
+    this->closeTabRequested(tabWidget->currentIndex());
   else {
     parent->close();
     if (use_gvim) this->closeTabRequested(tabWidget->currentIndex());  // ** MCH **
@@ -1090,13 +1131,6 @@ void TabManager::stopAnimation()
   parent->animateWidget->e_tval->setText("");
 }
 
-void TabManager::updateFindState()
-{
-  if (editor->findState == TabManager::FIND_REPLACE_VISIBLE) parent->showFind(true);
-  else if (editor->findState == TabManager::FIND_VISIBLE) parent->showFind(false);
-  else parent->hideFind();
-}
-
 void TabManager::onTabModified(EditorInterface *edt)
 {
   bumpSessionDirtyGeneration();
@@ -1200,6 +1234,8 @@ void TabManager::openTabFile(const QString& filename)
   auto [fname, fpath] = getEditorTabNameWithModifier(editor);
   setEditorTabName(fname, fpath, editor);
   parent->setWindowTitle(fname);
+  editor->clearTemporaryFile();
+
   emit editorContentReloaded(editor);
 }
 
@@ -1578,7 +1614,6 @@ void TabManager::saveSession(const QString& path)
     obj.insert(QStringLiteral("cursorLine"), cursorLine);
     obj.insert(QStringLiteral("cursorColumn"), cursorColumn);
     obj.insert(QStringLiteral("firstVisibleLine"), edt->firstVisibleLine());
-    obj.insert(QStringLiteral("findState"), edt->findState);
     const QByteArray customizerState = edt->parameterWidget->getSessionState();
     if (!customizerState.isEmpty()) {
       obj.insert(QStringLiteral("customizerState"), QString::fromUtf8(customizerState));
@@ -1586,6 +1621,9 @@ void TabManager::saveSession(const QString& path)
     if (!sessionPath.isEmpty()) {
       obj.insert(QStringLiteral("diskIdentity"),
                  QString::fromStdString(MainWindow::autoReloadIdentityForPath(sessionPath)));
+      // Persist the watched fingerprint as-is (including empty = companion was absent).
+      obj.insert(QStringLiteral("jsonDiskIdentity"),
+                 QString::fromStdString(edt->parameterWidget->getJsonAutoReloadId()));
     }
     insertLastExportIntoTabObject(obj, edt);
     tabs.append(obj);
@@ -1606,6 +1644,7 @@ void TabManager::saveSession(const QString& path)
   }
   if (parent) {
     QJsonObject findPanel;
+    findPanel.insert(QStringLiteral("state"), parent->findState);
     findPanel.insert(QStringLiteral("text"), parent->findInputField->text());
     findPanel.insert(QStringLiteral("replaceText"), parent->replaceInputField->text());
     win.insert(QStringLiteral("findPanel"), findPanel);
@@ -1669,7 +1708,6 @@ bool TabManager::saveGlobalSession(const QString& path, QString *error, bool sho
       obj.insert(QStringLiteral("cursorLine"), cursorLine);
       obj.insert(QStringLiteral("cursorColumn"), cursorColumn);
       obj.insert(QStringLiteral("firstVisibleLine"), edt->firstVisibleLine());
-      obj.insert(QStringLiteral("findState"), edt->findState);
       const QByteArray customizerState = edt->parameterWidget->getSessionState();
       if (!customizerState.isEmpty()) {
         obj.insert(QStringLiteral("customizerState"), QString::fromUtf8(customizerState));
@@ -1677,6 +1715,8 @@ bool TabManager::saveGlobalSession(const QString& path, QString *error, bool sho
       if (!sessionPath.isEmpty()) {
         obj.insert(QStringLiteral("diskIdentity"),
                    QString::fromStdString(MainWindow::autoReloadIdentityForPath(sessionPath)));
+        obj.insert(QStringLiteral("jsonDiskIdentity"),
+                   QString::fromStdString(edt->parameterWidget->getJsonAutoReloadId()));
       }
       insertLastExportIntoTabObject(obj, edt);
       tabs.append(obj);
@@ -1697,6 +1737,7 @@ bool TabManager::saveGlobalSession(const QString& path, QString *error, bool sho
     }
     if (mainWin) {
       QJsonObject findPanel;
+      findPanel.insert(QStringLiteral("state"), mainWin->findState);
       findPanel.insert(QStringLiteral("text"), mainWin->findInputField->text());
       findPanel.insert(QStringLiteral("replaceText"), mainWin->replaceInputField->text());
       win.insert(QStringLiteral("findPanel"), findPanel);
@@ -1765,6 +1806,10 @@ bool TabManager::migrateSession(QJsonObject& root, int fromVersion)
     }
     case 5: {
       // v5 -> v6: optional per-window windowGeometry (saveGeometry() base64 payload).
+      break;
+    }
+    case 6: {
+      // v6 -> v7: optional per-tab jsonDiskIdentity (companion customizer .json mtime+size).
       break;
     }
     default:
@@ -1918,130 +1963,178 @@ bool TabManager::restoreSession(const QString& path, int windowIndex)
   // compile/preview (which calls initPython) before the constructor is finished.
   const bool oldBlocked = tabWidget->blockSignals(true);
 
+  // resetForNewDocument() drains deleteLater via processEvents(). Pause auto-reload and
+  // hold GuiLocker so a nested timer cannot compile an intermediate tab (wrong 3D preview
+  // while the restored active tab is something else).
+  const bool autoReloadWasActive = parent->autoReloadTimer && parent->autoReloadTimer->isActive();
+  if (parent->autoReloadTimer) {
+    parent->autoReloadTimer->stop();
+  }
+
   QVector<QString> diskIdentityAtSave;
   diskIdentityAtSave.reserve(tabs.size());
+  int currentIndex = 0;
 
-  for (int i = 0; i < tabs.size(); ++i) {
-    const QJsonObject obj = tabs[i].toObject();
-    QString filepath = obj.value(QStringLiteral("filepath")).toString().trimmed();
-    QString content = obj.value(QStringLiteral("content")).toString();
-    const bool contentModified = obj.value(QStringLiteral("contentModified")).toBool();
-    const bool parameterModified = obj.value(QStringLiteral("parameterModified")).toBool();
-    const int cursorLine = obj.value(QStringLiteral("cursorLine")).toInt(-1);
-    const int cursorColumn = obj.value(QStringLiteral("cursorColumn")).toInt(-1);
-    const int firstVisibleLine = obj.value(QStringLiteral("firstVisibleLine")).toInt(-1);
-    int findState = obj.value(QStringLiteral("findState")).toInt(TabManager::FIND_HIDDEN);
-    const QByteArray customizerState = obj.value(QStringLiteral("customizerState")).toString().toUtf8();
-    std::optional<int> sessionLanguage;
-    if (obj.contains(QStringLiteral("language"))) {
-      sessionLanguage = obj.value(QStringLiteral("language")).toInt();
-    }
+  {
+    const GuiLocker restoreLock;
 
-    const QFileInfo fileInfo(filepath);
-    bool tabDiskBacked = false;
-    if (obj.contains(QStringLiteral("diskBacked"))) {
-      tabDiskBacked = obj.value(QStringLiteral("diskBacked")).toBool();
-    } else {
-      const bool onDiskNow = fileInfo.exists() && fileInfo.isFile();
-      const QString savedDiskId = obj.value(QStringLiteral("diskIdentity")).toString();
-      const bool hadDiskSnapshot = !savedDiskId.isEmpty();
-      if (onDiskNow) {
-        tabDiskBacked = true;
-      } else if (hadDiskSnapshot) {
-        // v4 session: file existed when saved (mtime+size recorded) — treat as disk-backed even if
-        // contentModified was true (unsaved edits) or the file was deleted before restore.
-        tabDiskBacked = true;
+    for (int i = 0; i < tabs.size(); ++i) {
+      const QJsonObject obj = tabs[i].toObject();
+      QString filepath = obj.value(QStringLiteral("filepath")).toString().trimmed();
+      QString content = obj.value(QStringLiteral("content")).toString();
+      const bool contentModified = obj.value(QStringLiteral("contentModified")).toBool();
+      const bool parameterModified = obj.value(QStringLiteral("parameterModified")).toBool();
+      const int cursorLine = obj.value(QStringLiteral("cursorLine")).toInt(-1);
+      const int cursorColumn = obj.value(QStringLiteral("cursorColumn")).toInt(-1);
+      const int firstVisibleLine = obj.value(QStringLiteral("firstVisibleLine")).toInt(-1);
+      const QByteArray customizerState =
+        obj.value(QStringLiteral("customizerState")).toString().toUtf8();
+      std::optional<int> sessionLanguage;
+      if (obj.contains(QStringLiteral("language"))) {
+        sessionLanguage = obj.value(QStringLiteral("language")).toInt();
+      }
+
+      const QFileInfo fileInfo(filepath);
+      bool tabDiskBacked = false;
+      if (obj.contains(QStringLiteral("diskBacked"))) {
+        tabDiskBacked = obj.value(QStringLiteral("diskBacked")).toBool();
       } else {
-        // Pre-v5 session: infer disk backing for stale-file warning (see diskBacked in Editor).
-        tabDiskBacked = !filepath.isEmpty() && !isSessionLaunchTokenPath(filepath) &&
-                        fileInfo.isAbsolute() && !isStandardUntitledFilename(filepath) &&
-                        !contentModified;
+        const bool onDiskNow = fileInfo.exists() && fileInfo.isFile();
+        const QString savedDiskId = obj.value(QStringLiteral("diskIdentity")).toString();
+        const bool hadDiskSnapshot = !savedDiskId.isEmpty();
+        if (onDiskNow) {
+          tabDiskBacked = true;
+        } else if (hadDiskSnapshot) {
+          // v4 session: file existed when saved (mtime+size recorded) — treat as disk-backed even if
+          // contentModified was true (unsaved edits) or the file was deleted before restore.
+          tabDiskBacked = true;
+        } else {
+          // Pre-v5 session: infer disk backing for stale-file warning (see diskBacked in Editor).
+          tabDiskBacked = !filepath.isEmpty() && !isSessionLaunchTokenPath(filepath) &&
+                          fileInfo.isAbsolute() && !isStandardUntitledFilename(filepath) &&
+                          !contentModified;
+        }
       }
-    }
 
-    const bool countsAsMissing = !filepath.isEmpty() && !isSessionLaunchTokenPath(filepath) &&
-                                 fileInfo.isAbsolute() && tabDiskBacked && !fileInfo.exists();
-    if (countsAsMissing) {
-      if (firstMissingIndex < 0) {
-        firstMissingIndex = i;
+      const bool countsAsMissing = !filepath.isEmpty() && !isSessionLaunchTokenPath(filepath) &&
+                                   fileInfo.isAbsolute() && tabDiskBacked && !fileInfo.exists();
+      if (countsAsMissing) {
+        if (firstMissingIndex < 0) {
+          firstMissingIndex = i;
+        }
+        ++missingCount;
       }
-      ++missingCount;
-    }
 
-    // If tab had no unsaved changes, reload from disk (match behavior when app is running).
-    if (!filepath.isEmpty() && !contentModified) {
-      QFile diskFile(filepath);
-      if (diskFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QTextStream in(&diskFile);
+      // If tab had no unsaved changes, reload from disk (match behavior when app is running).
+      if (!filepath.isEmpty() && !contentModified) {
+        QFile diskFile(filepath);
+        if (diskFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+          QTextStream in(&diskFile);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-        in.setEncoding(QStringConverter::Utf8);
+          in.setEncoding(QStringConverter::Utf8);
 #else
-        in.setCodec("UTF-8");
+          in.setCodec("UTF-8");
 #endif
-        content = in.readAll();
-        diskFile.close();
+          content = in.readAll();
+          diskFile.close();
+        }
       }
-    }
 
-    EditorInterface *edt;
-    if (i == 0) {
-      edt = static_cast<EditorInterface *>(tabWidget->widget(0));
-    } else {
-      createTab(QString(), false);
-      edt = editor;
-    }
-    setTabSessionData(edt, filepath, content, contentModified, parameterModified, customizerState,
-                      sessionLanguage, tabDiskBacked);
-    if (obj.contains(QStringLiteral("lastExport"))) {
-      applyLastExportFromJson(edt, obj.value(QStringLiteral("lastExport")).toObject());
-    }
-    if (findState < TabManager::FIND_HIDDEN || findState > TabManager::FIND_REPLACE_VISIBLE) {
-      findState = TabManager::FIND_HIDDEN;
-    }
-    edt->findState = findState;
-    if (cursorLine >= 0 && cursorColumn >= 0) {
-      edt->setCursorPosition(cursorLine, cursorColumn);
-    }
-    if (firstVisibleLine >= 0) {
-      edt->setFirstVisibleLine(firstVisibleLine);
-    }
+      EditorInterface *edt;
+      if (i == 0) {
+        edt = static_cast<EditorInterface *>(tabWidget->widget(0));
+      } else {
+        createTab(QString(), false);
+        edt = editor;
+      }
+      setTabSessionData(edt, filepath, content, contentModified, parameterModified, customizerState,
+                        sessionLanguage, tabDiskBacked);
+      if (!filepath.isEmpty() && !isSessionLaunchTokenPath(filepath) && tabDiskBacked) {
+        if (!parameterModified) {
+          // Clean customizer: disk companion JSON is source of truth (mirrors clean design
+          // content reload). Embedded setsJson may be empty/stale from older sessions.
+          // customizerState only carries currentIndex + setsJson (see getSessionState);
+          // group expand/scroll are not session-persisted, so resetting the widget is fine.
+          const QString selectedName =
+            ParameterWidget::selectedPresetNameFromSessionState(customizerState);
+          edt->parameterWidget->resetForNewDocument();
+          edt->parameterWidget->readFile(filepath);
+          edt->parameterWidget->selectPresetByName(selectedName);
+          edt->parameterWidget->setModified(false);
+        } else {
+          // Dirty customizer: keep session state; if companion JSON changed since save,
+          // seed the fingerprint with the saved id so the next poll prompts to reload.
+          // Distinguish a missing field (legacy session) from a present empty fingerprint
+          // (companion was absent when the session was saved).
+          const std::string currentJsonId =
+            MainWindow::autoReloadIdentityForPath(ParameterWidget::companionJsonPath(filepath));
+          if (obj.contains(QStringLiteral("jsonDiskIdentity"))) {
+            const std::string savedJsonId =
+              obj.value(QStringLiteral("jsonDiskIdentity")).toString().toStdString();
+            if (MainWindow::autoReloadIdentityMatches(savedJsonId, currentJsonId)) {
+              edt->parameterWidget->setJsonAutoReloadId(currentJsonId);
+            } else {
+              // Genuine change (or empty saved id): keep saved fingerprint so the next poll prompts.
+              edt->parameterWidget->setJsonAutoReloadId(savedJsonId);
+            }
+          } else {
+            edt->parameterWidget->primeJsonAutoReloadId(filepath);
+          }
+        }
+      }
+      if (obj.contains(QStringLiteral("lastExport"))) {
+        applyLastExportFromJson(edt, obj.value(QStringLiteral("lastExport")).toObject());
+      }
+      if (cursorLine >= 0 && cursorColumn >= 0) {
+        edt->setCursorPosition(cursorLine, cursorColumn);
+      }
+      if (firstVisibleLine >= 0) {
+        edt->setFirstVisibleLine(firstVisibleLine);
+      }
 
-    diskIdentityAtSave.append(obj.value(QStringLiteral("diskIdentity")).toString());
-  }
-  // Prime autoReloadId so auto-reload does not treat an empty id as "file changed" and reload
-  // over an unsaved buffer. For dirty tabs, if the on-disk file changed since the session was
-  // saved (diskIdentity in JSON != current stat), keep the saved fingerprint so the next
-  // fileChangedOnDisk() still reports a change and the usual reload dialog appears.
-  for (int ti = 0; ti < tabWidget->count(); ++ti) {
-    auto *syncEdt = static_cast<EditorInterface *>(tabWidget->widget(ti));
-    if (syncEdt->filepath.isEmpty()) {
-      continue;
+      diskIdentityAtSave.append(obj.value(QStringLiteral("diskIdentity")).toString());
     }
-    const std::string currentId = MainWindow::autoReloadIdentityForPath(syncEdt->filepath);
-    if (currentId.empty()) {
-      continue;
-    }
-    if (!syncEdt->isContentModified()) {
-      syncEdt->autoReloadId = currentId;
-      continue;
-    }
-    const QString savedId = ti < diskIdentityAtSave.size() ? diskIdentityAtSave[ti] : QString();
-    if (!savedId.isEmpty()) {
-      const std::string savedStd = savedId.toStdString();
-      if (savedStd != currentId) {
-        syncEdt->autoReloadId = savedStd;
+    // Prime autoReloadId so auto-reload does not treat an empty id as "file changed" and reload
+    // over an unsaved buffer. For dirty tabs, if the on-disk file changed since the session was
+    // saved (diskIdentity in JSON != current stat), keep the saved fingerprint so the next
+    // fileChangedOnDisk() still reports a change and the usual reload dialog appears.
+    for (int ti = 0; ti < tabWidget->count(); ++ti) {
+      auto *syncEdt = static_cast<EditorInterface *>(tabWidget->widget(ti));
+      if (syncEdt->filepath.isEmpty()) {
         continue;
       }
+      const std::string currentId = MainWindow::autoReloadIdentityForPath(syncEdt->filepath);
+      if (currentId.empty()) {
+        continue;
+      }
+      if (!syncEdt->isContentModified()) {
+        syncEdt->autoReloadId = currentId;
+        continue;
+      }
+      const QString savedId = ti < diskIdentityAtSave.size() ? diskIdentityAtSave[ti] : QString();
+      if (!savedId.isEmpty()) {
+        const std::string savedStd = savedId.toStdString();
+        // Legacy sessions used second-precision mtimes; match those against msec identities
+        // so an untouched file does not false-trigger the external-change dialog.
+        if (!MainWindow::autoReloadIdentityMatches(savedStd, currentId)) {
+          syncEdt->autoReloadId = savedStd;
+          continue;
+        }
+      }
+      syncEdt->autoReloadId = currentId;
     }
-    syncEdt->autoReloadId = currentId;
-  }
-  const int currentIndex = std::max(0, std::min(savedCurrentIndex, tabWidget->count() - 1));
-  tabWidget->setCurrentIndex(currentIndex);
+    currentIndex = std::max(0, std::min(savedCurrentIndex, tabWidget->count() - 1));
+    tabWidget->setCurrentIndex(currentIndex);
+  }  // GuiLocker: unlock before tabSwitched so the active tab can preview normally
 
   tabWidget->blockSignals(oldBlocked);
 
   // Manually trigger the tab-switched handler now that construction is far enough along.
   tabSwitched(currentIndex);
+
+  if (autoReloadWasActive && parent->autoReloadTimer) {
+    parent->autoReloadTimer->start();
+  }
 
   if (!findPanel.isEmpty()) {
     const QSignalBlocker findBlocker(parent->findInputField);
@@ -2050,7 +2143,10 @@ bool TabManager::restoreSession(const QString& path, int windowIndex)
     parent->replaceInputField->setText(findPanel.value(QStringLiteral("replaceText")).toString());
   }
 
-  updateFindState();
+  // Older sessions kept visibility on each tab; migrate the active tab only.
+  const int legacyState =
+    tabs[currentIndex].toObject().value(QStringLiteral("findState")).toInt(TabManager::FIND_HIDDEN);
+  parent->setFindState(findPanel.value(QStringLiteral("state")).toInt(legacyState));
 
   if (!viewState.isEmpty() && parent && parent->qglview) {
     double x = 0.0;
@@ -2284,6 +2380,7 @@ bool TabManager::saveAs(EditorInterface *edt, const QString& filepath)
     auto [fname, fpath] = getEditorTabNameWithModifier(edt);
     setEditorTabName(fname, fpath, edt);
     parent->setWindowTitle(fname);
+    edt->clearTemporaryFile();
   }
   return saveOk;
 }

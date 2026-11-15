@@ -271,9 +271,7 @@ void GLView::paintGL()
   glLineWidth(2);
   glColor3d(1.0, 0.0, 0.0);
 
-  glColor3f(0, 1, 0);
   Vector3d eyedir(this->modelview[2], this->modelview[6], this->modelview[10]);
-  if (shown_obj != nullptr) showObject(*shown_obj, eyedir);
 #ifdef ENABLE_PYTHON
   if (this->handle_mode) {
     glColor3f(0, 0, 1);
@@ -299,6 +297,18 @@ void GLView::paintGL()
   glColor3f(1, 0, 0);
   for (const SelectedObject& obj : this->selected_obj) {
     showObject(obj, eyedir);
+  }
+  // Draw the hovered/dragged markers last and without depth test: they sit exactly
+  // on a vertex of the model and were hidden or z-fighting ("blinking") before.
+  if (shown_obj != nullptr || drag_obj != nullptr) {
+    glDisable(GL_DEPTH_TEST);
+    glColor3f(0, 1, 0);  // measurement hover marker
+    if (shown_obj != nullptr) showObject(*shown_obj, eyedir);
+    // Drag handle: azure blue. Clearly differs from the measurement green, the
+    // red selection and from the yellow/green model colors of the default schemes.
+    glColor3f(0.0f, 0.6f, 1.0f);
+    if (drag_obj != nullptr) showObject(*drag_obj, eyedir);
+    glEnable(GL_DEPTH_TEST);
   }
   glDisable(GL_LIGHTING);
   if (showaxes) GLView::showSmallaxes(axescolor);
@@ -409,6 +419,10 @@ void GLView::initializeGL()
 
 void GLView::showSmallaxes(const Color4f& col)
 {
+  double axisLength = 10;
+  double labelPosition = 13;
+  double labelSize = 8;
+
   auto dpi = this->getDPI();
   // Small axis cross in the lower left corner
   glDepthFunc(GL_ALWAYS);
@@ -434,13 +448,13 @@ void GLView::showSmallaxes(const Color4f& col)
   glBegin(GL_LINES);
   glColor3d(1.0, 0.0, 0.0);
   glVertex3d(0, 0, 0);
-  glVertex3d(10 * dpi, 0, 0);
+  glVertex3d(axisLength * dpi, 0, 0);
   glColor3d(0.0, 1.0, 0.0);
   glVertex3d(0, 0, 0);
-  glVertex3d(0, 10 * dpi, 0);
+  glVertex3d(0, axisLength * dpi, 0);
   glColor3d(0.0, 0.0, 1.0);
   glVertex3d(0, 0, 0);
-  glVertex3d(0, 0, 10 * dpi);
+  glVertex3d(0, 0, axisLength * dpi);
   glEnd();
 
   GLdouble mat_model[16];
@@ -453,17 +467,20 @@ void GLView::showSmallaxes(const Color4f& col)
   glGetIntegerv(GL_VIEWPORT, viewport);
 
   GLdouble xlabel_x, xlabel_y, xlabel_z;
-  local_gluProject(12 * dpi, 0, 0, mat_model, mat_proj, viewport, &xlabel_x, &xlabel_y, &xlabel_z);
+  local_gluProject(labelPosition * dpi, 0, 0, mat_model, mat_proj, viewport, &xlabel_x, &xlabel_y,
+                   &xlabel_z);
   xlabel_x = std::round(xlabel_x);
   xlabel_y = std::round(xlabel_y);
 
   GLdouble ylabel_x, ylabel_y, ylabel_z;
-  local_gluProject(0, 12 * dpi, 0, mat_model, mat_proj, viewport, &ylabel_x, &ylabel_y, &ylabel_z);
+  local_gluProject(0, labelPosition * dpi, 0, mat_model, mat_proj, viewport, &ylabel_x, &ylabel_y,
+                   &ylabel_z);
   ylabel_x = std::round(ylabel_x);
   ylabel_y = std::round(ylabel_y);
 
   GLdouble zlabel_x, zlabel_y, zlabel_z;
-  local_gluProject(0, 0, 12 * dpi, mat_model, mat_proj, viewport, &zlabel_x, &zlabel_y, &zlabel_z);
+  local_gluProject(0, 0, labelPosition * dpi, mat_model, mat_proj, viewport, &zlabel_x, &zlabel_y,
+                   &zlabel_z);
   zlabel_x = std::round(zlabel_x);
   zlabel_y = std::round(zlabel_y);
 
@@ -477,7 +494,7 @@ void GLView::showSmallaxes(const Color4f& col)
 
   glColor3f(col.r(), col.g(), col.b());
 
-  float d = 3 * dpi;
+  float d = labelSize * dpi / 2;
   glBegin(GL_LINES);
   // X Label
   glVertex3d(xlabel_x - d, xlabel_y - d, 0);
@@ -485,9 +502,11 @@ void GLView::showSmallaxes(const Color4f& col)
   glVertex3d(xlabel_x - d, xlabel_y + d, 0);
   glVertex3d(xlabel_x + d, xlabel_y - d, 0);
   // Y Label
-  glVertex3d(ylabel_x - d, ylabel_y - d, 0);
-  glVertex3d(ylabel_x + d, ylabel_y + d, 0);
+  glVertex3d(ylabel_x, ylabel_y - d, 0);
+  glVertex3d(ylabel_x, ylabel_y, 0);
   glVertex3d(ylabel_x - d, ylabel_y + d, 0);
+  glVertex3d(ylabel_x, ylabel_y, 0);
+  glVertex3d(ylabel_x + d, ylabel_y + d, 0);
   glVertex3d(ylabel_x, ylabel_y, 0);
   // Z Label
   glVertex3d(zlabel_x - d, zlabel_y - d, 0);
